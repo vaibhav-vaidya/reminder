@@ -145,10 +145,13 @@
 </head>
 <body>
 
-<header>
-  <div class="hello">Care reminders</div>
-  <h1 id="greet">Hello 💗</h1>
-  <div class="datebar" id="datebar"></div>
+<header style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+  <div>
+    <div class="hello">Care reminders</div>
+    <h1 id="greet">Hello 💗</h1>
+    <div class="datebar" id="datebar"></div>
+  </div>
+  <button id="voiceBtn" aria-label="Toggle baby voice" style="border:1.5px solid var(--line);background:var(--card);border-radius:14px;padding:8px 12px;font:800 12px 'Nunito',sans-serif;color:var(--ink);cursor:pointer;box-shadow:var(--shadow);white-space:nowrap">👶 Voice on</button>
 </header>
 
 <div class="next" id="nextCard"></div>
@@ -226,6 +229,8 @@
       const r = await window.storage.get(KEY);
       if(r && r.value) state = JSON.parse(r.value);
     }catch(e){ /* first run – nothing saved yet */ }
+    if(typeof state.voiceOn === "boolean") voiceOn = state.voiceOn;
+    paintVoiceBtn();
     // keep only last 7 days of done-marks
     const cutoff = Date.now() - 7*864e5;
     for(const d in state.doneByDate){
@@ -275,6 +280,39 @@
     if(r.freq==="days")  return r.days.map(d=>DAYS[d]).join(" · ")+" at "+fmt(toMin(r.time));
     return "Daily at "+fmt(toMin(r.time));
   }
+
+  /* ---------- baby voice ---------- */
+  let voiceOn = true;
+  const PHRASES = [
+    "Mumma mumma! Time for NAME!",
+    "Hi mumma! Don't forget NAME, okay?",
+    "Mumma, it's NAME time! For me, please!",
+    "Knock knock mumma! NAME time!",
+    "Mumma! NAME now, pretty please!"
+  ];
+  function pickBabyVoice(){
+    const vs = speechSynthesis.getVoices();
+    return vs.find(v=>/child|kid/i.test(v.name))
+        || vs.find(v=>/female|woman|girl|Samantha|Zira|Google UK English Female|Google हिन्दी/i.test(v.name))
+        || vs[0];
+  }
+  function babySpeak(names){
+    if(!voiceOn || !("speechSynthesis" in window)) return;
+    try{
+      speechSynthesis.cancel();
+      const name = names && names.length ? names.join(" and ") : "your reminder";
+      const text = PHRASES[Math.floor(Math.random()*PHRASES.length)].replace("NAME", name);
+      const u = new SpeechSynthesisUtterance(text);
+      u.pitch = 2;      // highest pitch = baby-like
+      u.rate  = 1.05;
+      u.volume = 1;
+      const v = pickBabyVoice();
+      if(v) u.voice = v;
+      // small delay so the chime plays first
+      setTimeout(()=>speechSynthesis.speak(u), 900);
+    }catch(e){}
+  }
+  if("speechSynthesis" in window) speechSynthesis.getVoices(); // warm up voice list
 
   /* ---------- chime ---------- */
   function chime(){
@@ -376,12 +414,12 @@
   /* ---------- due check loop ---------- */
   setInterval(()=>{
     const now=new Date(), nowMin=now.getHours()*60+now.getMinutes();
-    let hit=false;
+    const dueNames=[];
     state.reminders.forEach(r=>occurrencesToday(r).forEach(m=>{
       const id=todayKey()+":"+occId(r,m);
-      if(m===nowMin && !isDone(r,m) && !alerted[id]){ alerted[id]=true; hit=true; }
+      if(m===nowMin && !isDone(r,m) && !alerted[id]){ alerted[id]=true; dueNames.push(r.name); }
     }));
-    if(hit) chime();
+    if(dueNames.length){ chime(); babySpeak(dueNames); }
     render();
   }, 20000);
 
@@ -418,6 +456,21 @@
   document.getElementById("fabBtn").onclick=openSheet;
   document.getElementById("cancelBtn").onclick=closeSheet;
   overlay.onclick=closeSheet;
+
+  /* ---------- voice toggle ---------- */
+  const voiceBtn=document.getElementById("voiceBtn");
+  function paintVoiceBtn(){
+    voiceBtn.textContent = voiceOn ? "👶 Voice on" : "🔕 Voice off";
+    voiceBtn.style.opacity = voiceOn ? "1" : ".55";
+  }
+  voiceBtn.onclick=async()=>{
+    voiceOn=!voiceOn;
+    state.voiceOn=voiceOn;
+    paintVoiceBtn();
+    await save();
+    if(voiceOn) babySpeak(["this"]); // sample so she hears it & unlocks audio
+    else if("speechSynthesis" in window) speechSynthesis.cancel();
+  };
 
   document.getElementById("saveBtn").onclick=async()=>{
     const name=document.getElementById("fName").value.trim();
