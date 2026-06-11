@@ -141,9 +141,36 @@
   .cancel{width:100%;margin-top:8px;padding:10px;border:none;background:none;color:var(--muted);font:800 14px 'Nunito',sans-serif;cursor:pointer}
   .note{font-size:12px;color:var(--muted);font-weight:700;text-align:center;margin-top:14px;line-height:1.5}
   @media (prefers-reduced-motion:reduce){.item.due{animation:none;border-color:var(--rose)}}
+
+  /* ---------- alarm banner ---------- */
+  .alarm{
+    position:fixed;top:0;left:0;right:0;z-index:20;display:none;
+    max-width:520px;margin:0 auto;
+    background:var(--rose);color:#fff;border-radius:0 0 20px 20px;
+    padding:calc(14px + env(safe-area-inset-top)) 16px 14px;
+    box-shadow:0 8px 24px rgba(194,107,134,.5);
+    animation:pulse 1.4s ease-in-out infinite;cursor:pointer;
+  }
+  .alarm.on{display:flex;align-items:center;gap:12px}
+  .alarm .big{font-size:30px}
+  .alarm .a-t{font-weight:900;font-size:16px}
+  .alarm .a-s{font-weight:700;font-size:13px;opacity:.9}
+  .alarm .stop{
+    margin-left:auto;flex:none;border:2px solid #fff;background:#fff;color:var(--rose);
+    font:900 14px 'Nunito',sans-serif;border-radius:999px;padding:10px 18px;cursor:pointer;
+  }
 </style>
 </head>
 <body>
+
+<div class="alarm" id="alarmBar">
+  <div class="big">👶</div>
+  <div>
+    <div class="a-t" id="alarmTitle">Reminder!</div>
+    <div class="a-s">Baby is calling you, mumma</div>
+  </div>
+  <button class="stop" id="alarmStop">STOP</button>
+</div>
 
 <header style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
   <div>
@@ -273,6 +300,7 @@
     state.doneByDate[k]=state.doneByDate[k]||{};
     const id=occId(r,m);
     state.doneByDate[k][id]=!state.doneByDate[k][id];
+    if(state.doneByDate[k][id]) stopAlarm(); // checking off silences the baby
     await save(); render();
   }
   function freqLabel(r){
@@ -281,19 +309,22 @@
     return "Daily at "+fmt(toMin(r.time));
   }
 
-  /* ---------- baby voice ---------- */
+  /* ---------- baby voice (UK English) ---------- */
   let voiceOn = true;
   const PHRASES = [
-    "Mumma mumma! Time for NAME!",
-    "Hi mumma! Don't forget NAME, okay?",
-    "Mumma, it's NAME time! For me, please!",
-    "Knock knock mumma! NAME time!",
-    "Mumma! NAME now, pretty please!"
+    "Mummy mummy! Time for NAME!",
+    "Hello mummy! Don't forget NAME, okay?",
+    "Mummy, it's NAME time! For me, please!",
+    "Knock knock mummy! NAME time!",
+    "Mummy! NAME now, pretty please!"
   ];
   function pickBabyVoice(){
     const vs = speechSynthesis.getVoices();
-    return vs.find(v=>/child|kid/i.test(v.name))
-        || vs.find(v=>/female|woman|girl|Samantha|Zira|Google UK English Female|Google हिन्दी/i.test(v.name))
+    const gb = vs.filter(v=>(v.lang||"").toLowerCase().startsWith("en-gb"));
+    return gb.find(v=>/child|kid|girl/i.test(v.name))
+        || gb.find(v=>/female|woman|Google UK English Female/i.test(v.name))
+        || gb[0]
+        || vs.find(v=>/child|kid|female|woman|girl/i.test(v.name))
         || vs[0];
   }
   function babySpeak(names){
@@ -303,16 +334,35 @@
       const name = names && names.length ? names.join(" and ") : "your reminder";
       const text = PHRASES[Math.floor(Math.random()*PHRASES.length)].replace("NAME", name);
       const u = new SpeechSynthesisUtterance(text);
+      u.lang = "en-GB";
       u.pitch = 2;      // highest pitch = baby-like
       u.rate  = 1.05;
       u.volume = 1;
       const v = pickBabyVoice();
       if(v) u.voice = v;
-      // small delay so the chime plays first
-      setTimeout(()=>speechSynthesis.speak(u), 900);
+      setTimeout(()=>speechSynthesis.speak(u), 700); // chime first, then voice
     }catch(e){}
   }
   if("speechSynthesis" in window) speechSynthesis.getVoices(); // warm up voice list
+
+  /* ---------- repeating alarm (keeps calling until stopped) ---------- */
+  let alarmTimer = null, alarmNames = [];
+  function startAlarm(names){
+    // merge new names into a running alarm
+    names.forEach(n=>{ if(!alarmNames.includes(n)) alarmNames.push(n); });
+    document.getElementById("alarmTitle").textContent = alarmNames.join(" · ");
+    document.getElementById("alarmBar").classList.add("on");
+    const ring = ()=>{ chime(); babySpeak(alarmNames); };
+    ring();
+    if(!alarmTimer) alarmTimer = setInterval(ring, 12000); // repeat every 12 s
+  }
+  function stopAlarm(){
+    if(alarmTimer){ clearInterval(alarmTimer); alarmTimer=null; }
+    alarmNames = [];
+    document.getElementById("alarmBar").classList.remove("on");
+    if("speechSynthesis" in window) speechSynthesis.cancel();
+    if(navigator.vibrate) navigator.vibrate(0);
+  }
 
   /* ---------- chime ---------- */
   function chime(){
@@ -419,7 +469,7 @@
       const id=todayKey()+":"+occId(r,m);
       if(m===nowMin && !isDone(r,m) && !alerted[id]){ alerted[id]=true; dueNames.push(r.name); }
     }));
-    if(dueNames.length){ chime(); babySpeak(dueNames); }
+    if(dueNames.length) startAlarm(dueNames);
     render();
   }, 20000);
 
@@ -458,6 +508,9 @@
   overlay.onclick=closeSheet;
 
   /* ---------- voice toggle ---------- */
+  document.getElementById("alarmStop").onclick=(e)=>{ e.stopPropagation(); stopAlarm(); };
+  document.getElementById("alarmBar").onclick=stopAlarm;
+
   const voiceBtn=document.getElementById("voiceBtn");
   function paintVoiceBtn(){
     voiceBtn.textContent = voiceOn ? "👶 Voice on" : "🔕 Voice off";
